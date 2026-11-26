@@ -69,6 +69,7 @@ class RagState:
         self.llm_label = "Not initialized"
         self.ready = False
         self.error = None
+        self._background_init = False
 
         self._pc = None
         self._index = None
@@ -142,6 +143,18 @@ class RagState:
         self._chain = prompt | model | RunnableLambda(rag.extract_text)
         self._retriever = self._vectorstore.as_retriever(search_kwargs={"k": rag.TOP_K})
         self.ready = True
+
+    def ensure_initialized(self):
+        """Thread-safe lazy initialization for serverless environments (e.g. Vercel)."""
+        if self.ready or self.error:
+            return
+        with self.lock:
+            if self.ready or self.error:
+                return
+            try:
+                self.initialize()
+            except Exception as exc:
+                self.error = f"{type(exc).__name__}: {exc}"
 
     def status_dict(self):
         return {
@@ -256,6 +269,8 @@ class RagRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/status":
+            if not STATE.ready and not STATE.error and not STATE._background_init:
+                STATE.ensure_initialized()
             self._send_json(200, STATE.status_dict())
             return
 
@@ -267,6 +282,7 @@ class RagRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/reindex":
             try:
+                STATE.ensure_initialized()
                 status = STATE.reindex()
                 self._send_json(200, status)
             except Exception as exc:
@@ -298,6 +314,7 @@ class RagRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
 
             try:
+                STATE.ensure_initialized()
                 docs, stream = STATE.retrieve_and_stream(question, language=language)
                 full_answer = []
                 for piece in stream:
@@ -323,6 +340,10 @@ class RagRequestHandler(BaseHTTPRequestHandler):
         self.send_error(404, "Not found")
 
 
+# Vercel Python entrypoint
+handler = RagRequestHandler
+
+
 def _init_worker():
     try:
         STATE.initialize()
@@ -338,6 +359,7 @@ def _init_worker():
 
 def main():
     print("Initializing Bano Qabil RAG pipeline in background...", flush=True)
+    STATE._background_init = True
     threading.Thread(target=_init_worker, daemon=True).start()
 
     server = ThreadingHTTPServer((HOST, PORT), RagRequestHandler)
