@@ -21,7 +21,7 @@ import sys
 from dotenv import load_dotenv
 from pinecone import Pinecone
 
-PINECONE_INDEX_NAME = "pdf-rag-index"  # must match the name used in json_rag.py
+PINECONE_INDEX_NAME = "banoqabil-rag-index"  # must match the name used in banoqabil_rag.py
 
 
 def main():

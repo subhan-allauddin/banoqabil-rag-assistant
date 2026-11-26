@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bano Qabil AI Assistant</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body class="dark">
+  <div id="app" class="app-shell">
+    <!-- Mobile backdrop -->
+    <div id="sidebar-backdrop" class="backdrop hidden"></div>
+
+    <!-- Left Sidebar -->
+    <aside id="sidebar" class="sidebar" aria-label="Sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <div class="brand-badge" aria-hidden="true">BQ</div>
+          <div>
+            <div class="brand-title">Bano Qabil AI</div>
+            <div class="brand-sub">Alkhidmat Foundation</div>
+          </div>
+        </div>
+        <button id="close-sidebar-btn" class="icon-btn mobile-only" title="Close menu" aria-label="Close menu">✕</button>
+      </div>
+
+      <button id="new-chat-btn" class="primary-btn full-width">
+        <span>＋</span> New Chat
+      </button>
+
+      <!-- Language Selector -->
+      <section class="sidebar-section">
+        <div class="section-label">Response Language</div>
+        <div class="lang-pills" role="group" aria-label="Response language">
+          <button class="lang-pill active" data-lang="auto">Auto</button>
+          <button class="lang-pill" data-lang="en">English</button>
+          <button class="lang-pill" data-lang="roman">Roman</button>
+          <button class="lang-pill" data-lang="ur" dir="rtl">اردو</button>
+        </div>
+      </section>
+
+      <!-- Knowledge Base Status Card -->
+      <section class="sidebar-section">
+        <div class="section-label">Knowledge Base</div>
+        <div class="kb-card">
+          <div class="kb-row">
+            <span class="kb-key">Status</span>
+            <span id="kb-status-badge" class="status-pill loading">Checking…</span>
+          </div>
+          <div class="kb-row">
+            <span class="kb-key">Dataset</span>
+            <span id="kb-file" class="kb-val">—</span>
+          </div>
+          <div class="kb-row">
+            <span class="kb-key">Pages / Chunks</span>
+            <span id="kb-counts" class="kb-val">—</span>
+          </div>
+          <div class="kb-row">
+            <span class="kb-key">Pinecone Vectors</span>
+            <span id="kb-vectors" class="kb-val">—</span>
+          </div>
+          <div class="kb-row">
+            <span class="kb-key">Model</span>
+            <span id="kb-model" class="kb-val truncate">—</span>
+          </div>
+          <button id="reindex-btn" class="secondary-btn full-width">
+            ↻ Re-index Knowledge Base
+          </button>
+        </div>
+      </section>
+
+      <!-- Recent Questions -->
+      <section class="sidebar-section history-section">
+        <div class="section-label">Recent Questions</div>
+        <ul id="history-list" class="history-list">
+          <li class="history-empty">No questions asked yet.</li>
+        </ul>
+      </section>
+    </aside>
+
+    <!-- Main Chat Area -->
+    <main class="chat-main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button id="open-sidebar-btn" class="icon-btn mobile-only" title="Open menu" aria-label="Open menu">☰</button>
+          <div>
+            <h1 class="topbar-title">Bano Qabil Assistant</h1>
+            <p class="topbar-subtitle">Grounded Q&amp;A on courses, admissions &amp; campuses</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span id="header-conn-pill" class="conn-pill">Connecting…</span>
+          <button id="theme-toggle-btn" class="icon-btn" title="Toggle dark mode" aria-label="Toggle dark mode">☀️</button>
+        </div>
+      </header>
+
+      <!-- Scrollable Messages / Welcome View -->
+      <div id="chat-scroll" class="chat-scroll">
+        <section id="welcome-view" class="welcome-view">
+          <div class="welcome-emblem">BQ</div>
+          <h2>Assalam-o-Alaikum!</h2>
+          <p>
+            Ask anything about <strong>Bano Qabil</strong> in English, Roman Urdu, or اردو.
+            Answers are retrieved directly from the official knowledge base with source links.
+          </p>
+          <div class="starter-grid">
+            <button class="starter-chip" data-prompt="What courses does Bano Qabil offer?">
+              <span class="chip-title">Courses Offered</span>
+              <span class="chip-sub">What courses does Bano Qabil offer?</span>
+            </button>
+            <button class="starter-chip" data-prompt="Bano Qabil ki fee kitni hai aur isay kaun run karta hai?">
+              <span class="chip-title">Fee &amp; Organization</span>
+              <span class="chip-sub">Bano Qabil ki fee kitni hai aur isay kaun run karta hai?</span>
+            </button>
+            <button class="starter-chip" data-prompt="Where are Bano Qabil campuses located?">
+              <span class="chip-title">Campus Locations</span>
+              <span class="chip-sub">Where are Bano Qabil campuses located?</span>
+            </button>
+            <button class="starter-chip" dir="rtl" data-prompt="بَنو قابل میں داخلے کا طریقہ کار کیا ہے؟">
+              <span class="chip-title">داخلے کا طریقہ</span>
+              <span class="chip-sub">بَنو قابل میں داخلے کا طریقہ کار کیا ہے؟</span>
+            </button>
+          </div>
+        </section>
+
+        <div id="messages-list" class="messages-list hidden"></div>
+      </div>
+
+      <!-- Sticky Input Bar -->
+      <footer class="composer-wrap">
+        <form id="chat-form" class="composer">
+          <textarea
+            id="question-input"
+            rows="1"
+            placeholder="Bano Qabil ke baare mein sawal poochein… (Enter to send, Shift+Enter for new line)"
+            autocomplete="off"
+          ></textarea>
+          <button id="send-btn" type="submit" class="send-btn" title="Send">Send ↑</button>
+          <button id="stop-btn" type="button" class="stop-btn hidden" title="Stop generating">Stop ■</button>
+        </form>
+        <div class="composer-note">
+          Answers are grounded in Bano Qabil's official knowledge base. Unverified questions return "I don't know".
+        </div>
+      </footer>
+    </main>
+
+    <!-- Right Source Inspector Drawer -->
+    <aside id="source-drawer" class="source-drawer hidden" aria-label="Source Inspector">
+      <div class="drawer-header">
+        <div>
+          <div class="drawer-kicker">Retrieved Source Chunk</div>
+          <h3 id="drawer-title" class="drawer-title">Source</h3>
+        </div>
+        <button id="close-drawer-btn" class="icon-btn" title="Close source panel" aria-label="Close source panel">✕</button>
+      </div>
+      <div class="drawer-body">
+        <a id="drawer-url" class="drawer-link" href="#" target="_blank" rel="noopener noreferrer">Open page ↗</a>
+        <div id="drawer-snippet" class="drawer-snippet"></div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Re-index Confirmation Modal -->
+  <div id="reindex-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-card">
+      <h3 id="modal-title">Re-index Knowledge Base?</h3>
+      <p>
+        This will clear the current Pinecone namespace and re-embed all chunks from
+        <code>banoqabil_kb.json</code>. It may take a minute.
+      </p>
+      <div class="modal-actions">
+        <button id="cancel-reindex-btn" class="secondary-btn">Cancel</button>
+        <button id="confirm-reindex-btn" class="primary-btn">Yes, Re-index</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
