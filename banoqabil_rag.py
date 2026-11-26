@@ -1,8 +1,9 @@
 """
 Website (JSON) RAG assistant (terminal only, no frontend).
 
-Stack (same as your PDF version):
-    LLM         : Groq  -> openai/gpt-oss-20b via ChatOpenAI (OpenAI-compatible endpoint)
+Stack:
+    LLM         : Groq (openai/gpt-oss-20b) if OPENAI_API_KEY/GROQ_API_KEY is set,
+                  otherwise Google Gemini (gemini-3.8-flash)
     Embeddings  : Google Gemini -> models/gemini-embedding-001
     Vector store: Pinecone
     Chunking    : RecursiveCharacterTextSplitter
@@ -11,14 +12,14 @@ Input: the JSON produced by the scraper, a list of objects like
     [{"url": "https://banoqabil.pk/about", "title": "About", "text": "..."}, ...]
 
 Usage:
-    python json_rag.py banoqabil_kb.json      # one or more JSON files and/or folders
-    python json_rag.py                        # no arguments -> uses banoqabil_kb.json if it exists,
+    python banoqabil_rag.py banoqabil_kb.json # one or more JSON files and/or folders
+    python banoqabil_rag.py                   # no arguments -> uses banoqabil_kb.json if it exists,
                                               # otherwise the script asks for a path
 
 Required in your .env file:
-    OPENAI_API_KEY=...    # your Groq key (same variable name as in the notebook)
-    GOOGLE_API_KEY=...    # Gemini embeddings
-    PINECONE_API_KEY=...
+    PINECONE_API_KEY=...                      # Pinecone vector database key
+    GOOGLE_API_KEY=... (or GEMINI_API_KEY)    # Gemini embeddings (and LLM fallback)
+    OPENAI_API_KEY=... (or GROQ_API_KEY)      # optional: Groq LLM
 """
 
 import hashlib
@@ -30,9 +31,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_core.documents import Document
-from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_core.runnables import RunnableLambda
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_openai.chat_models import ChatOpenAI
 from langchain_pinecone import PineconeVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -45,6 +46,14 @@ DEFAULT_JSON = "banoqabil_kb.json"
 
 LLM_MODEL = "openai/gpt-oss-20b"
 LLM_BASE_URL = "https://api.groq.com/openai/v1"
+GEMINI_LLM_MODELS = [
+    "gemini-3.5-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
+]
 EMBEDDING_MODEL = "models/gemini-embedding-001"
 
 CHUNK_SIZE = 1000
@@ -87,6 +96,22 @@ class PlainListEmbeddings(GoogleGenerativeAIEmbeddings):
 
     def embed_documents(self, *args, **kwargs):
         return [[float(x) for x in vec] for vec in super().embed_documents(*args, **kwargs)]
+
+
+def extract_text(message):
+    """Extract plain text from AIMessage/AIMessageChunk (handles both str and Gemini block lists)."""
+    content = getattr(message, "content", message)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+        return "".join(parts)
+    return str(content)
 
 
 # --------------------------------------------------------------------------- #
@@ -216,20 +241,20 @@ def namespace_vector_count(index, namespace):
     return summary.vector_count if summary else 0
 
 
-def upload_chunks(vectorstore, chunks, ids):
-    """Embed and upload in small batches, retrying on rate limits."""
+def upload_chunks(vectorstore, chunks, ids, offset=0):
+    """Embed and upload in small batches, resuming from offset and retrying on rate limits."""
     total = len(chunks)
-    for start in range(0, total, UPLOAD_BATCH_SIZE):
+    for start in range(offset, total, UPLOAD_BATCH_SIZE):
         batch = chunks[start:start + UPLOAD_BATCH_SIZE]
         batch_ids = ids[start:start + UPLOAD_BATCH_SIZE]
         for attempt in range(1, 6):
             try:
                 vectorstore.add_documents(batch, ids=batch_ids)
                 break
-            except Exception as exc:  # usually a rate limit
+            except Exception as exc:  # usually a rate limit (100 embed requests/min on free tier)
                 if attempt == 5:
                     raise
-                wait = 10 * attempt
+                wait = 62 if "RESOURCE_EXHAUSTED" in str(exc) or "429" in str(exc) else 10 * attempt
                 print(f"  [retry {attempt}/4] {type(exc).__name__}: waiting {wait}s...")
                 time.sleep(wait)
         print(f"  Uploaded {min(start + UPLOAD_BATCH_SIZE, total)}/{total} chunks")
@@ -266,22 +291,52 @@ def format_sources(docs):
     return "\n".join(lines)
 
 
-def main():
+def build_llm(llm_key, gemini_key):
+    """Build the chat model (Groq via OpenAI-compatible API if key set, else Gemini)."""
+    if llm_key:
+        return ChatOpenAI(
+            openai_api_key=llm_key,
+            model=LLM_MODEL,
+            base_url=LLM_BASE_URL,
+            temperature=0,
+        )
+    for model_name in GEMINI_LLM_MODELS:
+        try:
+            llm = ChatGoogleGenerativeAI(
+                model=model_name,
+                google_api_key=gemini_key,
+                temperature=0,
+            )
+            llm.invoke("ping")
+            print(f"  Using Gemini LLM: {model_name}")
+            return llm
+        except Exception as exc:
+            print(f"  [warn] {model_name} unavailable ({type(exc).__name__}), trying next...")
+    return ChatGoogleGenerativeAI(
+        model=GEMINI_LLM_MODELS[0],
+        google_api_key=gemini_key,
+        temperature=0,
+    )
+
+
+def setup_rag(raw_paths=None):
+    """Load KB, ensure Pinecone index & embeddings are populated, and return (retriever, chain)."""
     load_dotenv()
 
     llm_key = os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY")
+    gemini_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    pinecone_key = os.getenv("PINECONE_API_KEY")
+
     missing = []
-    if not llm_key:
-        missing.append("OPENAI_API_KEY (your Groq key)")
-    if not os.getenv("GOOGLE_API_KEY"):
-        missing.append("GOOGLE_API_KEY")
-    if not os.getenv("PINECONE_API_KEY"):
+    if not gemini_key:
+        missing.append("GOOGLE_API_KEY (or GEMINI_API_KEY)")
+    if not pinecone_key:
         missing.append("PINECONE_API_KEY")
     if missing:
         sys.exit("Missing in your .env file: " + ", ".join(missing))
 
-    # ---- get the JSON data ------------------------------------------------ #
-    raw_paths = sys.argv[1:] or ask_for_paths()
+    if raw_paths is None:
+        raw_paths = sys.argv[1:] or ask_for_paths()
     json_paths = resolve_json_paths(raw_paths)
     if not json_paths:
         sys.exit("No valid JSON files given.")
@@ -297,10 +352,12 @@ def main():
 
     # ---- embeddings + Pinecone ------------------------------------------ #
     print("\nConnecting to Pinecone...")
-    embeddings = PlainListEmbeddings(model=EMBEDDING_MODEL)
-    dimension = len(embeddings.embed_query("dimension probe"))
-
-    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+    embeddings = PlainListEmbeddings(model=EMBEDDING_MODEL, google_api_key=gemini_key)
+    pc = Pinecone(api_key=pinecone_key)
+    if PINECONE_INDEX_NAME in pc.list_indexes().names():
+        dimension = pc.describe_index(PINECONE_INDEX_NAME).dimension
+    else:
+        dimension = len(embeddings.embed_query("dimension probe"))
     index = ensure_index(pc, dimension)
 
     namespace = f"web-{fingerprint(json_paths)}"
@@ -310,21 +367,21 @@ def main():
     if already >= len(chunks):
         print(f"  This data is already indexed ({already} vectors). Skipping embedding.")
     else:
-        print(f"  Embedding and uploading {len(chunks)} chunks...")
+        print(f"  Embedding and uploading chunks {already}..{len(chunks)} (of {len(chunks)})...")
         ids = [f"{namespace}-{i}" for i in range(len(chunks))]
-        upload_chunks(vectorstore, chunks, ids)
+        upload_chunks(vectorstore, chunks, ids, offset=already)
         wait_until_searchable(index, namespace, len(chunks))
 
     # ---- the chain (same shape as the notebook) -------------------------- #
-    model = ChatOpenAI(
-        openai_api_key=llm_key,
-        model=LLM_MODEL,
-        base_url=LLM_BASE_URL,
-        temperature=0,
-    )
+    model = build_llm(llm_key, gemini_key)
     prompt = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
-    chain = prompt | model | StrOutputParser()
+    chain = prompt | model | RunnableLambda(extract_text)
     retriever = vectorstore.as_retriever(search_kwargs={"k": TOP_K})
+    return retriever, chain
+
+
+def main():
+    retriever, chain = setup_rag()
 
     # ---- question loop --------------------------------------------------- #
     print("\nReady. Ask questions about Bano Qabil. Type 'exit' to quit.")
