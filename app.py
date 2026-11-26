@@ -13,9 +13,22 @@ import mimetypes
 import os
 import sys
 import threading
+import typing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+
+# Compatibility shim for pydantic==1.10.8 on Python 3.12.4+ (e.g. Vercel runtime)
+if sys.version_info >= (3, 12, 4):
+    _orig_forward_ref_evaluate = typing.ForwardRef._evaluate
+
+    def _patched_forward_ref_evaluate(self, globalns, localns, *args, **kwargs):
+        if args and "recursive_guard" not in kwargs and isinstance(args[-1], (set, frozenset)):
+            kwargs["recursive_guard"] = args[-1]
+            args = args[:-1]
+        return _orig_forward_ref_evaluate(self, globalns, localns, *args, **kwargs)
+
+    typing.ForwardRef._evaluate = _patched_forward_ref_evaluate
 
 from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
