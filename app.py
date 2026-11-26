@@ -216,7 +216,7 @@ def serialize_sources(docs):
     return sources
 
 
-class RagRequestHandler(BaseHTTPRequestHandler):
+class handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, format, *args):
@@ -340,8 +340,8 @@ class RagRequestHandler(BaseHTTPRequestHandler):
         self.send_error(404, "Not found")
 
 
-# Vercel Python entrypoint
-handler = RagRequestHandler
+# Backwards-compatible alias
+RagRequestHandler = handler
 
 
 def _init_worker():
@@ -362,7 +362,7 @@ def main():
     STATE._background_init = True
     threading.Thread(target=_init_worker, daemon=True).start()
 
-    server = ThreadingHTTPServer((HOST, PORT), RagRequestHandler)
+    server = ThreadingHTTPServer((HOST, PORT), handler)
     print(f"Serving Web UI at http://{HOST}:{PORT}", flush=True)
     try:
         server.serve_forever()
